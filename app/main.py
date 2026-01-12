@@ -1,8 +1,11 @@
 import logging
 import sys
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from pathlib import Path
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import asyncio
 
 from app.config import settings
@@ -19,6 +22,10 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+# Setup templates
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 @asynccontextmanager
@@ -50,14 +57,16 @@ app = FastAPI(
 )
 
 
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "name": "Dropshipping Trend Detector",
-        "version": "1.0.0",
-        "status": "running"
-    }
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """Serve the dashboard"""
+    return templates.TemplateResponse("dashboard.html", {"request": request})
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    """Dashboard page"""
+    return templates.TemplateResponse("dashboard.html", {"request": request})
 
 
 @app.get("/health")
@@ -68,6 +77,34 @@ async def health():
         "environment": settings.environment,
         "cron_schedule": f"{settings.cron_hour:02d}:{settings.cron_minute:02d} UTC"
     }
+
+
+@app.get("/api/status")
+async def api_status():
+    """API status endpoint"""
+    return {
+        "name": "Dropshipping Trend Detector",
+        "version": "1.0.0",
+        "status": "running"
+    }
+
+
+@app.get("/api/products")
+async def get_products(limit: int = 100):
+    """Get all products for the dashboard"""
+    try:
+        products = db.get_top_trending_products(limit=limit)
+        return {
+            "success": True,
+            "count": len(products),
+            "products": products
+        }
+    except Exception as e:
+        logger.error(f"Error fetching products: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e), "products": []}
+        )
 
 
 @app.get("/api/trends")
