@@ -27,6 +27,15 @@ class TrendingProduct(BaseModel):
     notes: Optional[str] = None
 
 
+class TrendHistory(BaseModel):
+    """Model for trend history tracking"""
+    id: Optional[int] = None
+    product_id: int
+    trend_score: float
+    search_volume: Optional[int] = None
+    recorded_at: Optional[datetime] = None
+
+
 class TrendAnalysis(BaseModel):
     """Model for trend analysis results"""
     product: TrendingProduct
