@@ -15,6 +15,8 @@
             --accent-warm: #ff9933;
             --accent-cool: #33ccff;
             --accent-green: #00ff88;
+            --accent-us: #3b82f6;
+            --accent-uk: #dc2626;
             --text-primary: #ffffff;
             --text-secondary: #8888aa;
             --text-muted: #555566;
@@ -65,6 +67,85 @@
         .header p {
             color: var(--text-secondary);
             font-size: 1.1rem;
+        }
+
+        /* Region Toggle */
+        .region-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .region-toggle-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .region-switch {
+            display: flex;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .region-btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .region-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .region-btn.active.us {
+            background: var(--accent-us);
+            color: white;
+        }
+
+        .region-btn.active.uk {
+            background: var(--accent-uk);
+            color: white;
+        }
+
+        .region-btn .flag {
+            font-size: 1.2rem;
+        }
+
+        .current-region {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .current-region .flag {
+            font-size: 1.2rem;
+        }
+
+        .current-region.us {
+            border-color: var(--accent-us);
+        }
+
+        .current-region.uk {
+            border-color: var(--accent-uk);
         }
 
         /* Stats Bar */
@@ -161,6 +242,7 @@
         .refresh-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+            transform: none;
         }
 
         /* Products Grid */
@@ -384,6 +466,20 @@
             .refresh-btn {
                 margin-left: 0;
             }
+            
+            .region-toggle {
+                flex-direction: column;
+            }
+        }
+
+        /* Scanning animation */
+        .scanning {
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
     </style>
 </head>
@@ -393,6 +489,23 @@
             <h1>🔥 Trend Detector</h1>
             <p>Real-time dropshipping product trends from Amazon Best Sellers</p>
         </header>
+
+        <!-- Region Toggle -->
+        <div class="region-toggle">
+            <span class="region-toggle-label">Amazon Region:</span>
+            <div class="region-switch">
+                <button class="region-btn us" data-region="US" onclick="setRegion('US')">
+                    <span class="flag">🇺🇸</span> US ($)
+                </button>
+                <button class="region-btn uk" data-region="UK" onclick="setRegion('UK')">
+                    <span class="flag">🇬🇧</span> UK (£)
+                </button>
+            </div>
+            <div class="current-region" id="current-region">
+                <span class="flag">🇺🇸</span>
+                <span>Currently: <strong id="region-display">US</strong></span>
+            </div>
+        </div>
 
         <div class="stats-bar">
             <div class="stat-card hot">
@@ -420,7 +533,7 @@
             <button class="filter-btn" data-filter="Fashion">👗 Fashion</button>
             <button class="filter-btn" data-filter="Beauty">💄 Beauty</button>
             <button class="filter-btn" data-filter="Sports">🏃 Sports</button>
-            <button class="refresh-btn" id="refresh-btn">🔄 Refresh Data</button>
+            <button class="refresh-btn" id="refresh-btn">🔄 Scan Now</button>
         </div>
 
         <div id="products-container">
@@ -439,12 +552,68 @@
     <script>
         let allProducts = [];
         let currentFilter = 'all';
+        let currentRegion = 'US';
+
+        // Fetch current region
+        async function fetchRegion() {
+            try {
+                const response = await fetch('/api/region');
+                const data = await response.json();
+                currentRegion = data.region || 'US';
+                updateRegionDisplay();
+            } catch (error) {
+                console.error('Error fetching region:', error);
+            }
+        }
+
+        // Set region
+        async function setRegion(region) {
+            try {
+                const response = await fetch(`/api/region/${region}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    currentRegion = region;
+                    updateRegionDisplay();
+                }
+            } catch (error) {
+                console.error('Error setting region:', error);
+            }
+        }
+
+        // Update region display
+        function updateRegionDisplay() {
+            const regionDisplay = document.getElementById('region-display');
+            const currentRegionDiv = document.getElementById('current-region');
+            const regionBtns = document.querySelectorAll('.region-btn');
+            
+            regionDisplay.textContent = currentRegion;
+            
+            // Update current region styling
+            currentRegionDiv.classList.remove('us', 'uk');
+            currentRegionDiv.classList.add(currentRegion.toLowerCase());
+            
+            // Update flag
+            const flag = currentRegion === 'US' ? '🇺🇸' : '🇬🇧';
+            currentRegionDiv.querySelector('.flag').textContent = flag;
+            
+            // Update button states
+            regionBtns.forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.dataset.region === currentRegion) {
+                    btn.classList.add('active');
+                }
+            });
+        }
 
         // Fetch products from API
         async function fetchProducts() {
             try {
                 const response = await fetch('/api/products');
                 const data = await response.json();
+                if (data.region) {
+                    currentRegion = data.region;
+                    updateRegionDisplay();
+                }
                 return data.products || [];
             } catch (error) {
                 console.error('Error fetching products:', error);
@@ -471,9 +640,15 @@
             return 'cool';
         }
 
+        // Get currency symbol
+        function getCurrency() {
+            return currentRegion === 'UK' ? '£' : '$';
+        }
+
         // Render products
         function renderProducts(products) {
             const container = document.getElementById('products-container');
+            const currency = getCurrency();
             
             if (products.length === 0) {
                 container.innerHTML = `
@@ -482,7 +657,7 @@
                         <h3>No products found</h3>
                         <p>Products will appear here after the scraper runs.</p>
                         <p style="margin-top: 1rem; color: var(--text-muted);">
-                            The scraper runs daily at 6:00 AM UTC, or click "Trigger Scan" to run now.
+                            Click "Scan Now" to fetch products from Amazon ${currentRegion}.
                         </p>
                     </div>
                 `;
@@ -497,7 +672,7 @@
                     ${sorted.map(product => {
                         const scoreClass = getScoreClass(product.trend_score);
                         const isHot = product.trend_score >= 70;
-                        const price = product.price_estimate ? `$${product.price_estimate.toFixed(2)}` : 'N/A';
+                        const price = product.price_estimate ? `${currency}${product.price_estimate.toFixed(2)}` : 'N/A';
                         
                         return `
                             <div class="product-card ${isHot ? 'hot' : ''}">
@@ -560,6 +735,7 @@
                 </div>
             `;
 
+            await fetchRegion();
             allProducts = await fetchProducts();
             filterProducts();
             
@@ -570,20 +746,44 @@
         async function triggerScan() {
             const btn = document.getElementById('refresh-btn');
             btn.disabled = true;
-            btn.textContent = '⏳ Scanning...';
+            btn.textContent = `⏳ Scanning ${currentRegion}...`;
+            btn.classList.add('scanning');
 
             try {
-                await fetch('/api/trigger-scan', { method: 'POST' });
-                // Wait a bit for scan to complete
-                setTimeout(async () => {
-                    await loadData();
-                    btn.disabled = false;
-                    btn.textContent = '🔄 Refresh Data';
+                await fetch(`/api/trigger-scan?region=${currentRegion}`, { method: 'POST' });
+                
+                // Show scanning message
+                const container = document.getElementById('products-container');
+                container.innerHTML = `
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <p>Scanning Amazon ${currentRegion} Best Sellers...</p>
+                        <p style="margin-top: 0.5rem; color: var(--text-muted);">This may take 2-3 minutes</p>
+                    </div>
+                `;
+                
+                // Poll for results
+                let attempts = 0;
+                const pollInterval = setInterval(async () => {
+                    attempts++;
+                    const newProducts = await fetchProducts();
+                    
+                    if (newProducts.length > 0 || attempts > 30) {
+                        clearInterval(pollInterval);
+                        allProducts = newProducts;
+                        filterProducts();
+                        btn.disabled = false;
+                        btn.textContent = '🔄 Scan Now';
+                        btn.classList.remove('scanning');
+                        document.getElementById('last-updated').textContent = new Date().toLocaleString();
+                    }
                 }, 5000);
+                
             } catch (error) {
                 console.error('Error triggering scan:', error);
                 btn.disabled = false;
-                btn.textContent = '🔄 Refresh Data';
+                btn.textContent = '🔄 Scan Now';
+                btn.classList.remove('scanning');
             }
         }
 
