@@ -6,6 +6,7 @@ from app.scrapers.google_trends import GoogleTrendsScraper
 from app.services.gemini_analyzer import GeminiAnalyzer
 from app.config import settings
 import time
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,8 @@ class TrendAnalyzer:
             
             score += velocity_score + volume_score
         else:
-            # No trend data penalty
-            score += 10
+            # No trend data - use neutral score based on being a bestseller
+            score += 15
         
         # 2. Recency Score (30 points)
         # Products in best sellers are by definition recent
@@ -117,7 +118,7 @@ class TrendAnalyzer:
             
             score += comp_score
         else:
-            score += 5
+            score += 7  # Neutral competition score
         
         # Ensure score is between 0 and 100
         return min(max(score, 0), 100)
@@ -132,13 +133,24 @@ class TrendAnalyzer:
         
         logger.info(f"Analyzing {len(products)} products...")
         
-        for idx, product in enumerate(products, 1):
+        # Only query Google Trends for top 15 products (by rank) to avoid rate limits
+        # Sort by rank first, then process
+        sorted_products = sorted(products, key=lambda p: p.rank if p.rank else 999)
+        products_for_trends = sorted_products[:15]  # Top 15 get trend data
+        products_without_trends = sorted_products[15:]
+        
+        logger.info(f"📊 Getting Google Trends for top {len(products_for_trends)} products...")
+        
+        # Process products that will get trend data
+        for idx, product in enumerate(products_for_trends, 1):
             try:
-                # Get Google Trends data
+                # Get Google Trends data with longer delay
                 trend_data = self.google_trends.get_trend_data(product.name)
                 
-                # Add delay to avoid rate limiting
-                time.sleep(1)
+                # Longer random delay (8-15 seconds) to avoid rate limiting
+                delay = random.uniform(8, 15)
+                logger.debug(f"Waiting {delay:.1f}s before next trend query...")
+                time.sleep(delay)
                 
                 # Calculate trend score
                 trend_score = self.calculate_trend_score(product, trend_data)
@@ -154,7 +166,7 @@ class TrendAnalyzer:
                     )
                 
                 # Create TrendingProduct
-                base_notes = f"Velocity: {trend_data.get('velocity', 0)}%" if trend_data else None
+                base_notes = f"Velocity: {trend_data.get('velocity', 0)}%" if trend_data else "Bestseller rank bonus"
                 notes = f"{base_notes}\n\n🤖 AI Insight: {ai_notes}" if ai_notes else base_notes
                 
                 trending_product = TrendingProduct(
@@ -170,10 +182,34 @@ class TrendAnalyzer:
                 trending_products.append(trending_product)
                 
                 logger.info(
-                    f"[{idx}/{len(products)}] {product.name[:40]}... - "
+                    f"[{idx}/{len(products_for_trends)}] {product.name[:40]}... - "
                     f"Score: {trend_score:.1f}, "
                     f"Volume: {trending_product.search_volume}"
                 )
+                
+            except Exception as e:
+                logger.error(f"Error analyzing product '{product.name}': {e}")
+                continue
+        
+        # Process remaining products without Google Trends (faster)
+        logger.info(f"⚡ Processing {len(products_without_trends)} additional products (no trend lookup)...")
+        
+        for idx, product in enumerate(products_without_trends, 1):
+            try:
+                # Calculate score without trend data
+                trend_score = self.calculate_trend_score(product, None)
+                
+                trending_product = TrendingProduct(
+                    product_name=product.name,
+                    category=product.category,
+                    source_url=product.url,
+                    trend_score=round(trend_score, 2),
+                    search_volume=0,
+                    price_estimate=product.price,
+                    notes="Bestseller item"
+                )
+                
+                trending_products.append(trending_product)
                 
             except Exception as e:
                 logger.error(f"Error analyzing product '{product.name}': {e}")
