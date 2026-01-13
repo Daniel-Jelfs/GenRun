@@ -1,5 +1,5 @@
 """
-Amazon Best Sellers Scraper - Updated with multiple selector strategies
+Amazon Best Sellers Scraper - Multi-region support (US & UK)
 """
 import time
 import random
@@ -12,30 +12,59 @@ from fake_useragent import UserAgent
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class AmazonScraper:
     """Scrape Amazon Best Sellers using requests + BeautifulSoup"""
     
-    def __init__(self, request_delay: int = 3, max_retries: int = 3):
+    # Region configurations
+    REGIONS = {
+        "US": {
+            "base_url": "https://www.amazon.com",
+            "currency": "$",
+            "categories": {
+                "Home": "/gp/bestsellers/home-garden/",
+                "Electronics": "/gp/bestsellers/electronics/",
+                "Fashion": "/gp/bestsellers/fashion/",
+                "Beauty": "/gp/bestsellers/beauty/",
+                "Sports": "/gp/bestsellers/sporting-goods/"
+            }
+        },
+        "UK": {
+            "base_url": "https://www.amazon.co.uk",
+            "currency": "£",
+            "categories": {
+                "Home": "/gp/bestsellers/kitchen/",
+                "Electronics": "/gp/bestsellers/electronics/",
+                "Fashion": "/gp/bestsellers/fashion/",
+                "Beauty": "/gp/bestsellers/beauty/",
+                "Sports": "/gp/bestsellers/sports/"
+            }
+        }
+    }
+    
+    def __init__(self, region: str = "US", request_delay: int = 3, max_retries: int = 3):
+        self.region = region.upper()
+        if self.region not in self.REGIONS:
+            self.region = "US"
+        
         self.request_delay = request_delay
         self.max_retries = max_retries
         self.ua = UserAgent()
         self.session = requests.Session()
         
-        # Updated categories with correct URLs
-        self.categories = {
-            "Home": "https://www.amazon.com/Best-Sellers/zgbs/",
-            "Electronics": "https://www.amazon.com/Best-Sellers-Electronics/zgbs/electronics/",
-            "Fashion": "https://www.amazon.com/Best-Sellers-Fashion/zgbs/fashion/",
-            "Beauty": "https://www.amazon.com/Best-Sellers-Beauty/zgbs/beauty/",
-            "Sports": "https://www.amazon.com/Best-Sellers-Sports-Outdoors/zgbs/sporting-goods/"
-        }
+        self.config = self.REGIONS[self.region]
+        self.base_url = self.config["base_url"]
+        self.currency = self.config["currency"]
+        self.categories = self.config["categories"]
+        
+        logger.info(f"Amazon Scraper initialized for region: {self.region}")
     
     def _get_headers(self) -> Dict[str, str]:
         """Generate realistic headers"""
         return {
             'User-Agent': self.ua.random,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-GB,en;q=0.9,en-US;q=0.8' if self.region == "UK" else 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'DNT': '1',
             'Connection': 'keep-alive',
@@ -45,222 +74,304 @@ class AmazonScraper:
             'Sec-Fetch-Site': 'none',
             'Sec-Fetch-User': '?1',
             'Cache-Control': 'max-age=0',
-            'Referer': 'https://www.amazon.com/'
         }
     
     def _fetch_page(self, url: str, category: str) -> Optional[str]:
         """Fetch page with retries and exponential backoff"""
         for attempt in range(self.max_retries):
             try:
-                delay = self.request_delay + random.uniform(1, 3)
+                delay = self.request_delay + random.uniform(2, 5)
                 time.sleep(delay)
+                
+                headers = self._get_headers()
+                logger.info(f"Fetching {category} from {url}")
                 
                 response = self.session.get(
                     url,
-                    headers=self._get_headers(),
+                    headers=headers,
                     timeout=30,
                     allow_redirects=True
                 )
                 
                 if response.status_code == 200:
-                    logger.info(f"Successfully fetched {category}")
+                    logger.info(f"✅ Successfully fetched {category} ({len(response.text)} bytes)")
                     return response.text
                 elif response.status_code == 429:
-                    wait_time = 10 * (attempt + 1)
-                    logger.warning(f"Rate limited on {category}, waiting {wait_time}s")
+                    wait_time = 15 * (attempt + 1) + random.uniform(5, 15)
+                    logger.warning(f"⚠️ Rate limited on {category}, waiting {wait_time:.0f}s...")
                     time.sleep(wait_time)
                 elif response.status_code == 503:
-                    wait_time = 15 * (attempt + 1)
-                    logger.warning(f"Service unavailable for {category}, waiting {wait_time}s")
+                    wait_time = 20 * (attempt + 1) + random.uniform(5, 15)
+                    logger.warning(f"⚠️ Service unavailable for {category}, waiting {wait_time:.0f}s...")
                     time.sleep(wait_time)
                 else:
-                    logger.warning(f"HTTP {response.status_code} for {category}")
+                    logger.warning(f"⚠️ HTTP {response.status_code} for {category}")
                     
             except Exception as e:
-                logger.error(f"Error fetching {category}: {str(e)}")
+                logger.error(f"❌ Error fetching {category}: {str(e)}")
                 if attempt < self.max_retries - 1:
-                    time.sleep(5 * (attempt + 1))
+                    time.sleep(10 * (attempt + 1))
         
-        logger.error(f"Failed to fetch {category} after {self.max_retries} attempts")
+        logger.error(f"❌ Failed to fetch {category} after {self.max_retries} attempts")
         return None
     
-    def _extract_product_info(self, element, category: str) -> Optional[Dict]:
-        """Extract product information using multiple strategies"""
-        try:
-            # Strategy 1: Try multiple title selectors
-            title = None
-            title_selectors = [
-                {'class_': 'p13n-sc-truncate'},
-                {'class_': '_cDEzb_p13n-sc-css-line-clamp-3_g3dy1'},
-                {'class_': 'a-link-normal'},
-                {'id': lambda x: x and 'title' in x.lower()}
-            ]
+    def _extract_products_from_html(self, html: str, category: str) -> List[Dict]:
+        """Extract products using multiple selector strategies"""
+        soup = BeautifulSoup(html, 'lxml')
+        products = []
+        
+        # Strategy 1: Look for zg-grid-general-faceout (common structure)
+        # Strategy 2: Look for data-asin attribute (product identifier)
+        # Strategy 3: Look for id starting with 'gridItemRoot'
+        # Strategy 4: Look for specific class patterns
+        
+        selectors_to_try = [
+            ('div', {'id': lambda x: x and x.startswith('gridItemRoot')}),
+            ('div', {'class': 'zg-grid-general-faceout'}),
+            ('div', {'class': 'p13n-sc-uncoverable-faceout'}),
+            ('div', {'data-asin': True}),
+            ('li', {'class': 'zg-item-immersion'}),
+            ('div', {'class': lambda x: x and 'a-section' in str(x) and 'a-spacing' in str(x)}),
+        ]
+        
+        product_elements = []
+        used_strategy = None
+        
+        for tag, attrs in selectors_to_try:
+            try:
+                elements = soup.find_all(tag, attrs)
+                if elements and len(elements) >= 3:  # Need at least 3 products
+                    product_elements = elements
+                    used_strategy = str(attrs)
+                    logger.info(f"📦 Found {len(elements)} elements using: {tag} {attrs}")
+                    break
+            except Exception as e:
+                logger.debug(f"Selector failed: {e}")
+                continue
+        
+        if not product_elements:
+            # Fallback: Try to find any product-like containers
+            all_links = soup.find_all('a', href=lambda x: x and '/dp/' in str(x))
+            logger.warning(f"⚠️ No product containers found, found {len(all_links)} product links as fallback")
             
-            for selector in title_selectors:
-                title_elem = element.find(['div', 'span', 'a'], selector)
-                if title_elem:
-                    title = title_elem.get_text(strip=True)
-                    if title and len(title) > 3:
-                        break
-            
-            if not title:
-                return None
-            
-            # Strategy 2: Try multiple URL patterns
-            url = None
-            url_elem = element.find('a', href=True)
-            if url_elem:
-                href = url_elem['href']
-                if href.startswith('http'):
-                    url = href
-                elif href.startswith('/'):
-                    url = f"https://www.amazon.com{href}"
-            
-            if not url:
-                return None
-            
-            # Strategy 3: Extract price (multiple patterns)
-            price = 0.0
-            price_selectors = [
-                {'class_': 'a-price'},
-                {'class_': 'p13n-sc-price'},
-                {'class_': '_cDEzb_p13n-sc-price_3mJ9Z'}
-            ]
-            
-            for selector in price_selectors:
-                price_elem = element.find('span', selector)
-                if price_elem:
-                    offscreen = price_elem.find('span', {'class_': 'a-offscreen'})
-                    if offscreen:
-                        try:
-                            price_text = offscreen.get_text(strip=True).replace('$', '').replace(',', '')
-                            price = float(price_text)
-                            break
-                        except (ValueError, AttributeError):
-                            pass
-            
-            # Strategy 4: Extract rating
-            rating = None
-            rating_elem = element.find('span', {'class_': 'a-icon-alt'})
-            if rating_elem:
+            # Extract from links directly
+            seen_urls = set()
+            for link in all_links[:60]:
                 try:
-                    rating_text = rating_elem.get_text(strip=True)
-                    rating = float(rating_text.split()[0])
-                except (ValueError, IndexError):
-                    pass
+                    href = link.get('href', '')
+                    if '/dp/' not in href:
+                        continue
+                    
+                    # Build full URL
+                    if href.startswith('http'):
+                        url = href
+                    else:
+                        url = self.base_url + href
+                    
+                    # Extract ASIN for deduplication
+                    asin = href.split('/dp/')[1].split('/')[0].split('?')[0]
+                    if asin in seen_urls:
+                        continue
+                    seen_urls.add(asin)
+                    
+                    # Try to get title
+                    title = link.get_text(strip=True)
+                    if not title or len(title) < 5:
+                        title_elem = link.find('span') or link.find('div')
+                        if title_elem:
+                            title = title_elem.get_text(strip=True)
+                    
+                    if title and len(title) > 5:
+                        products.append({
+                            'name': title[:200],
+                            'url': url.split('?')[0],
+                            'price': 0.0,
+                            'category': category,
+                            'rank': len(products) + 1
+                        })
+                except Exception as e:
+                    continue
             
-            # Strategy 5: Extract review count
-            review_count = 0
-            review_elem = element.find('span', {'class_': 'a-size-small'})
-            if review_elem:
-                try:
-                    review_text = review_elem.get_text(strip=True).replace(',', '')
-                    review_count = int(''.join(filter(str.isdigit, review_text)))
-                except ValueError:
-                    pass
-            
-            return {
-                'name': title,
-                'url': url,
-                'price': price,
-                'category': category,
-                'rating': rating,
-                'review_count': review_count
-            }
-            
-        except Exception as e:
-            logger.debug(f"Error extracting product: {str(e)}")
-            return None
+            return products[:50]
+        
+        # Process found elements
+        for idx, element in enumerate(product_elements[:60], 1):
+            try:
+                product = self._extract_single_product(element, category, idx)
+                if product:
+                    products.append(product)
+            except Exception as e:
+                logger.debug(f"Error extracting product {idx}: {e}")
+                continue
+        
+        return products
     
-    def scrape_category(self, category: str, url: str, max_products: int = 50) -> List[Dict]:
-        """Scrape products from a category using multiple selector strategies"""
-        logger.info(f"Scraping Amazon {category} category...")
+    def _extract_single_product(self, element, category: str, rank: int) -> Optional[Dict]:
+        """Extract product info from a single element"""
+        
+        # Find product title - try multiple approaches
+        title = None
+        title_selectors = [
+            ('div', {'class': 'p13n-sc-truncate'}),
+            ('span', {'class': 'zg-text-center-align'}),
+            ('div', {'class': '_cDEzb_p13n-sc-css-line-clamp-3_g3dy1'}),
+            ('div', {'class': '_cDEzb_p13n-sc-css-line-clamp-4_2q2cc'}),
+            ('span', {'class': 'a-size-small'}),
+            ('a', {'class': 'a-link-normal'}),
+        ]
+        
+        for tag, attrs in title_selectors:
+            title_elem = element.find(tag, attrs)
+            if title_elem:
+                title = title_elem.get_text(strip=True)
+                if title and len(title) > 5:
+                    break
+        
+        if not title:
+            # Last resort: get any text from anchor
+            anchor = element.find('a', href=True)
+            if anchor:
+                title = anchor.get('title') or anchor.get_text(strip=True)
+        
+        if not title or len(title) < 5:
+            return None
+        
+        # Find URL
+        url = None
+        link = element.find('a', href=True)
+        if link:
+            href = link.get('href', '')
+            if href.startswith('http'):
+                url = href
+            elif href.startswith('/'):
+                url = self.base_url + href
+        
+        if not url:
+            return None
+        
+        # Clean URL
+        url = url.split('?')[0]
+        
+        # Find price
+        price = 0.0
+        price_selectors = [
+            ('span', {'class': 'a-price'}),
+            ('span', {'class': 'p13n-sc-price'}),
+            ('span', {'class': '_cDEzb_p13n-sc-price_3mJ9Z'}),
+            ('span', {'class': 'a-color-price'}),
+        ]
+        
+        for tag, attrs in price_selectors:
+            price_elem = element.find(tag, attrs)
+            if price_elem:
+                # Look for offscreen price (actual value)
+                offscreen = price_elem.find('span', {'class': 'a-offscreen'})
+                if offscreen:
+                    price = self._parse_price(offscreen.get_text(strip=True))
+                else:
+                    price = self._parse_price(price_elem.get_text(strip=True))
+                
+                if price > 0:
+                    break
+        
+        return {
+            'name': title[:200],
+            'url': url,
+            'price': price,
+            'category': category,
+            'rank': rank
+        }
+    
+    def _parse_price(self, price_text: str) -> float:
+        """Parse price from text"""
+        try:
+            # Remove currency symbols and clean
+            cleaned = price_text.replace('$', '').replace('£', '').replace('€', '')
+            cleaned = cleaned.replace(',', '').replace(' ', '')
+            
+            # Handle ranges like "29.99 - 39.99"
+            if '-' in cleaned:
+                cleaned = cleaned.split('-')[0]
+            
+            # Extract first number
+            import re
+            match = re.search(r'(\d+\.?\d*)', cleaned)
+            if match:
+                return float(match.group(1))
+        except Exception:
+            pass
+        return 0.0
+    
+    def scrape_category(self, category: str, path: str, max_products: int = 50) -> List[Dict]:
+        """Scrape products from a single category"""
+        url = self.base_url + path
+        logger.info(f"🔍 Scraping {self.region} Amazon - {category}...")
         
         html = self._fetch_page(url, category)
         if not html:
             return []
         
-        soup = BeautifulSoup(html, 'lxml')
-        products = []
+        products = self._extract_products_from_html(html, category)
         
-        # Try multiple container selectors
-        container_strategies = [
-            # Strategy 1: ID-based grid items
-            {'id': lambda x: x and x.startswith('gridItemRoot')},
-            # Strategy 2: Common class patterns
-            {'class_': 'zg-grid-general-faceout'},
-            {'class_': 'p13n-sc-uncoverable-faceout'},
-            {'class_': 'a-carousel-card'},
-            # Strategy 3: Data attributes
-            {'attrs': {'data-asin': True}},
-            # Strategy 4: Generic containers with links
-            {'class_': lambda x: x and 'item' in str(x).lower()}
-        ]
-        
-        product_elements = []
-        for strategy in container_strategies:
-            elements = soup.find_all('div', strategy)
-            if elements:
-                logger.info(f"Found {len(elements)} elements using strategy: {strategy}")
-                product_elements = elements
-                break
-        
-        if not product_elements:
-            logger.warning(f"No product containers found in {category}")
-            return []
-        
-        logger.info(f"Found {len(product_elements)} product elements in {category}")
-        
-        # Extract products
-        for element in product_elements[:max_products]:
-            product = self._extract_product_info(element, category)
-            if product:
-                products.append(product)
-                logger.info(f"Extracted: {product['name'][:40]}... (${product['price']})")
-        
-        logger.info(f"Scraped {len(products)} products from {category}")
-        return products
+        logger.info(f"✅ Scraped {len(products)} products from {category}")
+        return products[:max_products]
     
     def scrape_all_categories(self, products_per_category: int = 50) -> List[Dict]:
         """Scrape all categories"""
-        logger.info(f"Starting Amazon scrape - {len(self.categories)} categories")
+        logger.info(f"🚀 Starting Amazon {self.region} scrape - {len(self.categories)} categories")
         all_products = []
         
-        for i, (category, url) in enumerate(self.categories.items(), 1):
+        for i, (category, path) in enumerate(self.categories.items(), 1):
             try:
-                logger.info(f"Category {i}/{len(self.categories)}: {category}")
-                products = self.scrape_category(category, url, products_per_category)
+                logger.info(f"📦 Category {i}/{len(self.categories)}: {category}")
+                products = self.scrape_category(category, path, products_per_category)
                 all_products.extend(products)
                 
                 # Longer delay between categories
                 if i < len(self.categories):
-                    delay = self.request_delay + random.uniform(3, 8)
-                    logger.info(f"Waiting {delay:.1f}s before next category...")
+                    delay = self.request_delay + random.uniform(5, 12)
+                    logger.info(f"⏳ Waiting {delay:.1f}s before next category...")
                     time.sleep(delay)
                 
             except Exception as e:
-                logger.error(f"Error scraping {category}: {str(e)}")
+                logger.error(f"❌ Error scraping {category}: {str(e)}")
                 continue
         
-        logger.info(f"Total products scraped from Amazon: {len(all_products)}")
+        logger.info(f"🎉 Total products scraped from Amazon {self.region}: {len(all_products)}")
         return all_products
+    
+    def get_available_regions(self) -> List[str]:
+        """Return list of available regions"""
+        return list(self.REGIONS.keys())
+    
+    def set_region(self, region: str):
+        """Change the scraper region"""
+        region = region.upper()
+        if region in self.REGIONS:
+            self.region = region
+            self.config = self.REGIONS[self.region]
+            self.base_url = self.config["base_url"]
+            self.currency = self.config["currency"]
+            self.categories = self.config["categories"]
+            logger.info(f"Region changed to: {self.region}")
+        else:
+            logger.warning(f"Invalid region: {region}. Available: {list(self.REGIONS.keys())}")
 
 
 if __name__ == "__main__":
-    logger.info("Testing Amazon scraper...")
-    scraper = AmazonScraper(request_delay=4, max_retries=3)
-    
-    # Test with 5 products per category
-    products = scraper.scrape_all_categories(products_per_category=5)
-    
-    logger.info(f"\nResults: {len(products)} total products")
-    
-    if products:
-        logger.info("\nSample products:")
-        for product in products[:3]:
-            print(f"\n{product['name']}")
-            print(f"Category: {product['category']}")
-            print(f"Price: ${product['price']:.2f}")
-            print(f"URL: {product['url'][:60]}...")
-    else:
-        logger.warning("No products were scraped - Amazon may be blocking or selectors need updating")
+    # Test both regions
+    for region in ["US", "UK"]:
+        logger.info(f"\n{'='*50}")
+        logger.info(f"Testing {region} scraper...")
+        logger.info(f"{'='*50}\n")
+        
+        scraper = AmazonScraper(region=region, request_delay=4, max_retries=2)
+        products = scraper.scrape_all_categories(products_per_category=5)
+        
+        logger.info(f"\n{region} Results: {len(products)} total products")
+        
+        if products:
+            for product in products[:3]:
+                print(f"\n{product['name'][:50]}...")
+                print(f"  Category: {product['category']}")
+                print(f"  Price: {scraper.currency}{product['price']:.2f}")
