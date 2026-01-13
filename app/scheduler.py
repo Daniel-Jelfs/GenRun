@@ -7,12 +7,15 @@ import asyncio
 
 from app.config import settings
 from app.database import db
-from app.models import TrendingProduct, TrendHistory
+from app.models import TrendingProduct, TrendHistory, ScrapedProduct
 from app.scrapers.amazon_scraper import AmazonScraper
 from app.services.trend_analyzer import TrendAnalyzer
 from app.services.discord_notifier import DiscordNotifier
 
 logger = logging.getLogger(__name__)
+
+# Global region setting
+current_region = "US"
 
 
 class TrendDetectionScheduler:
@@ -20,27 +23,63 @@ class TrendDetectionScheduler:
     
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
-        self.amazon_scraper = AmazonScraper()
         self.trend_analyzer = TrendAnalyzer()
         self.discord_notifier = DiscordNotifier()
     
-    async def run_trend_detection(self):
+    def get_region(self) -> str:
+        """Get current region"""
+        global current_region
+        return current_region
+    
+    def set_region(self, region: str):
+        """Set region for scraping"""
+        global current_region
+        if region.upper() in ["US", "UK"]:
+            current_region = region.upper()
+            logger.info(f"Region set to: {current_region}")
+    
+    async def run_trend_detection(self, region: str = None):
         """Main trend detection job"""
+        global current_region
+        
+        if region:
+            current_region = region.upper()
+        
         start_time = datetime.utcnow()
         logger.info("="*60)
         logger.info(f"Starting trend detection job at {start_time.isoformat()}")
+        logger.info(f"Region: {current_region}")
         logger.info("="*60)
         
         try:
+            # Create scraper for current region
+            amazon_scraper = AmazonScraper(region=current_region)
+            
             # Step 1: Scrape Amazon Best Sellers
             logger.info("Step 1: Scraping Amazon Best Sellers...")
-            scraped_products = await self.amazon_scraper.scrape_all_categories(max_per_category=50)
+            scraped_data = amazon_scraper.scrape_all_categories(products_per_category=50)
             
-            if not scraped_products:
-                error_msg = "No products scraped from Amazon"
+            if not scraped_data:
+                error_msg = f"No products scraped from Amazon {current_region}"
                 logger.error(error_msg)
                 await self.discord_notifier.send_error_notification(error_msg)
                 return
+            
+            # Convert dict data to ScrapedProduct objects
+            scraped_products = []
+            for item in scraped_data:
+                try:
+                    product = ScrapedProduct(
+                        name=item['name'],
+                        category=item['category'],
+                        url=item['url'],
+                        price=item.get('price'),
+                        rank=item.get('rank')
+                    )
+                    scraped_products.append(product)
+                except Exception as e:
+                    logger.debug(f"Error converting product: {e}")
+                    continue
             
             logger.info(f"Scraped {len(scraped_products)} products total")
             
@@ -137,7 +176,6 @@ class TrendDetectionScheduler:
         )
         
         # Also run immediately on startup (for testing)
-        # Comment out this line in production if you don't want immediate run
         self.scheduler.add_job(
             self.run_trend_detection,
             'date',
