@@ -75,7 +75,8 @@ async def health():
     return {
         "status": "healthy",
         "environment": settings.environment,
-        "cron_schedule": f"{settings.cron_hour:02d}:{settings.cron_minute:02d} UTC"
+        "cron_schedule": f"{settings.cron_hour:02d}:{settings.cron_minute:02d} UTC",
+        "region": scheduler.get_region()
     }
 
 
@@ -85,7 +86,35 @@ async def api_status():
     return {
         "name": "Dropshipping Trend Detector",
         "version": "1.0.0",
-        "status": "running"
+        "status": "running",
+        "region": scheduler.get_region()
+    }
+
+
+@app.get("/api/region")
+async def get_region():
+    """Get current region"""
+    return {
+        "region": scheduler.get_region(),
+        "available_regions": ["US", "UK"]
+    }
+
+
+@app.post("/api/region/{region}")
+async def set_region(region: str):
+    """Set the region for scraping"""
+    region = region.upper()
+    if region not in ["US", "UK"]:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": f"Invalid region: {region}. Use 'US' or 'UK'"}
+        )
+    
+    scheduler.set_region(region)
+    return {
+        "success": True,
+        "region": region,
+        "message": f"Region set to {region}. New scans will use Amazon {region}."
     }
 
 
@@ -97,7 +126,8 @@ async def get_products(limit: int = 100):
         return {
             "success": True,
             "count": len(products),
-            "products": products
+            "products": products,
+            "region": scheduler.get_region()
         }
     except Exception as e:
         logger.error(f"Error fetching products: {e}")
@@ -115,7 +145,8 @@ async def get_trends(limit: int = 10):
         return {
             "success": True,
             "count": len(products),
-            "products": products
+            "products": products,
+            "region": scheduler.get_region()
         }
     except Exception as e:
         logger.error(f"Error fetching trends: {e}")
@@ -126,15 +157,24 @@ async def get_trends(limit: int = 10):
 
 
 @app.post("/api/trigger-scan")
-async def trigger_scan():
+async def trigger_scan(region: str = None):
     """Manually trigger a trend detection scan"""
     try:
-        logger.info("Manual scan triggered via API")
+        current_region = scheduler.get_region()
+        scan_region = region.upper() if region else current_region
+        
+        if scan_region not in ["US", "UK"]:
+            scan_region = current_region
+        
+        logger.info(f"Manual scan triggered via API for region: {scan_region}")
+        
         # Run in background
-        asyncio.create_task(scheduler.run_trend_detection())
+        asyncio.create_task(scheduler.run_trend_detection(region=scan_region))
+        
         return {
             "success": True,
-            "message": "Trend detection scan started"
+            "message": f"Trend detection scan started for Amazon {scan_region}",
+            "region": scan_region
         }
     except Exception as e:
         logger.error(f"Error triggering scan: {e}")
